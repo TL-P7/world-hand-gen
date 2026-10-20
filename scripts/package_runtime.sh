@@ -156,6 +156,17 @@ with zipfile.ZipFile(archive_path, "r") as archive:
         raise SystemExit("error: forbidden paths in runtime archive: " + ", ".join(details))
     if any(name == "" for name in names):
         raise SystemExit("error: runtime archive contains an empty path")
+    required = {
+        "src/model/flow/state.py",
+        "src/model/wrappers/mano_fit.py",
+    }
+    missing = sorted(required - set(names))
+    if missing:
+        raise SystemExit("error: runtime archive is missing required MANO-flow files: " + ", ".join(missing))
+    state_source = archive.read("src/model/flow/state.py").decode("utf-8")
+    fit_source = archive.read("src/model/wrappers/mano_fit.py").decode("utf-8")
+    if "class ManoFlowState" not in state_source or "-> ManoFlowState" not in fit_source:
+        raise SystemExit("error: runtime archive does not expose mano_fit with ManoFlowState output")
 
 print(f"created {archive_path} ({len(files)} files, {len(directories)} directories)")
 PY

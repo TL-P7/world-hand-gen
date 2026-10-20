@@ -162,7 +162,7 @@ python -m src.train.train \
 
 各损失项的监督要求如下：
 
-| 损失项 | 作用 | 适配器必须提供 |
+| 损失项 | 作用 | 正权重启用时适配器必须提供 |
 | --- | --- | --- |
 | `flow` | MANO 平移、根部旋转和局部旋转的流匹配状态误差 | `target_mano` |
 | `camera_flow` | 相机 6D 旋转和平移的流匹配误差 | 规范的 `target_camera` |
@@ -173,7 +173,7 @@ python -m src.train.train \
 
 ### 非 HOT3D 数据适配器的三维关节训练
 
-当前 `egodex` 适配器提供外部三维关节监督。非 HOT3D 入口暂时只允许正权重的 `joints3d`：
+当前 `egodex` 适配器提供外部三维关节监督。非 HOT3D 入口仍使用 MMDiT 预测 `ManoFlowState`，只允许不依赖 MANO 真值的正权重 `joints3d`；该损失比较解码后的 MANO joints 与外部关键点：
 
 ```bash
 python -m src.train.train \
@@ -186,6 +186,36 @@ python -m src.train.train \
   --device cpu \
   --experiment-dir "${WHG_EXPERIMENT_ROOT}/egodex-smoke"
 ```
+
+### 从 3D joints 拟合 MANO 参数
+
+`src.model.wrappers.mano_fit.fit_joints_to_mano` 用已经初始化的 MANO 解码器和 3D 关节标注拟合 MANO pose/translation，适合只有 3D keypoint 标注、需要生成统一 `target_mano` 的数据适配器。该接口不读取或写入数据集文件，也不改变训练流程。
+
+输入和输出遵循项目统一的 MANO 格式：
+
+- 输入 `joints3d`：`[B, 2, T, 16, 3]`，手顺序为 `left, right`；16 点必须使用 `JOINT_ORDER`：`wrist`，然后依次是 `thumb`、`index`、`middle`、`ring`、`little` 的各 3 个关节。
+- 可选 `initial_state`：`ManoFlowState`，形状为 translation `[B,2,T,3]`、root rotation `[B,2,T,6]`、local rotation `[B,2,T,15,6]`，作为优化初值。
+- 输出：`ManoFlowState`，rotation 使用连续 6D 表示，形状与 `initial_state` 相同。
+- 可选 `joint_valid`：`[B,2,T,16]`；无效或 NaN 关节不会参与拟合。没有任何有效点时接口会报错。
+- 默认优化参数为 `steps=20`、`lr=0.05`，也可以通过函数参数覆盖；推荐的单手批量配置为 `batch_size=64`。
+- MANO shape/betas 不参与拟合，沿用输入模型的固定 shape；输出保持输入 3D joints 的坐标系和单位。
+
+```python
+import torch
+from src.model.flow.state import ManoFlowState
+from src.model.wrappers import ManoWrapper, fit_joints_to_mano
+
+mano = ManoWrapper()  # MANO layer 在首次 forward 时按输入设备和 dtype 加载
+joints3d = torch.zeros(1, 2, 16, 16, 3)  # [B, 2, T, 16, 3]
+target_mano: ManoFlowState = fit_joints_to_mano(
+    mano,
+    joints3d,
+    steps=20,
+    lr=0.05,
+)
+```
+
+拟合内部使用 MANO 原生 16 点顺序与公共 `JOINT_ORDER` 的显式映射，并优化 root rotation、15 个局部 rotation 和 translation；不要把公共顺序直接当作 MANO 原生顺序传入模型。
 
 ## 运行时源码压缩包
 

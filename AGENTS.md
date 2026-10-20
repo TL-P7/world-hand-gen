@@ -28,13 +28,13 @@
   - `README.md`：数据适配器接入规范、统一字段表、数据文件标准和冒烟测试命令。
 - `model/`：生成模型和外部模型封装器。
   - `wrappers/`：HaMeR、检测器、VGGT、MANO 等外部模型封装器。
-  - `flow/`：流匹配状态、条件编码、手部/相机生成器、联合生成器和采样器。
+  - `flow/`：流匹配状态、条件编码、MANO/相机联合生成器和采样器；生成器输出 `ManoFlowState` 与可选的 `CameraFlowState`，3D 关键点仅作为可配置监督。
 - `loss/losses.py`：流匹配、三维关节、加速度、相机姿态和相机轨迹损失。
 - `geometry/rotation.py`：6D 旋转、轴角、四元数转换与测地线距离。
 - `train/`：训练入口和数据/特征处理进程。
   - `train.py`：HOT3D 完整流匹配训练、分布式数据并行、AdamW、检查点恢复和检查点后评估。
-  - `configured.py`：数据集无关的三维关节适配器冒烟测试和验证入口。
-  - `runner.py`：`key=value` 数据适配器配置和 `name=weight` 损失配置解析。
+  - `configured.py`：数据集无关的 MANO-flow 验证入口；外部三维关节通过解码 MANO 的 `joints3d` loss 监督。
+  - `runner.py`：`key=value` 数据适配器配置、`name=weight` 损失配置解析和统一 MANO-flow runner。
   - `sample.py`：HOT3D 窗口采样、HaMeR/VGGT 条件和训练目标构造。
   - `flow_sampling.py`：噪声和流匹配时间采样。
   - `step.py`：单步前向计算和加权损失；反向传播由外层训练循环执行。
@@ -65,7 +65,7 @@
 测试存放在 `tests/`，目录结构对应 `src/`：
 
 - `tests/data`：数据加载器、相机变换、窗口契约和数据适配器。
-- `tests/train`：采样、flow time、训练 step、joint flow 和训练入口。
+- `tests/train`：采样、flow time、MANO-flow 训练 step 和训练入口。
 - `tests/loss`：MANO、关节、相机和运动损失。
 - `tests/model`：流匹配、注意力、条件编码、MANO 封装器和生成模型。
 - `tests/eval`：评估协议、指标、队列、重算和运行入口。

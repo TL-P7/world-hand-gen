@@ -11,7 +11,7 @@ sample = adapter.sample(seed=seed, batch_size=batch_size, window=window)
 | adaptor 名称 | 实现 | 数据根路径 | 默认划分 | 适合的训练入口 |
 | --- | --- | --- | --- | --- |
 | `hot3d` | `Hot3DAdapter` | `src.config.DATA_ROOT` | `train` | `python -m src.train.train`，完整 MANO + 相机 flow 训练 |
-| `egodex` | `EgoDexAdapter` | `src.config.EGODEX_ROOT` | `test` | `python -m src.train.configured` 或 `src.train.train --dataset egodex`，当前为 3D joints 目标验证 |
+| `egodex` | `EgoDexAdapter` | `src.config.EGODEX_ROOT` | `test` | `python -m src.train.configured` 或 `src.train.train --dataset egodex`，MMDiT MANO-flow + 外部 `joints3d` 监督 |
 
 数据集路径、缓存和实验输出统一在 `src/config.py` 配置，并通过 `WHG_*` 环境变量覆盖；不要把机器相关的绝对路径写进适配器、训练循环或文档。数据目录只读；预处理缓存应放在 `CACHE_ROOT` 等数据目录之外。第三方源码由 `scripts/bootstrap_third_party.sh` 获取，源码压缩包不包含第三方 checkout。
 
@@ -32,7 +32,7 @@ sample = adapter.sample(seed=seed, batch_size=batch_size, window=window)
 | `camera_extrinsics` | 可选 | `float[B, T, 4, 4]` | 原始相机外参，统一语义为 `x_world = E_t @ x_source_camera`（`world_from_camera`）；保留数据集 source camera 轴，不做首帧对齐。它与 `target_camera` 不是同一字段语义。 |
 | `camera_intrinsics` | 可选 | `float[B, T, 3, 3]` | 与 `images` 像素坐标和图像方向匹配的内参；HOT3D 是 rectified/upright pixels，EgoDex 是 original video pixels。 |
 | `camera_valid` | 可选 | `bool[B, T]` | 相机标注是否有效。 |
-| `hand_joints3d` / `target_joints3d` | 按目标需要 | `float[B, 2, T, 16, 3]` | 外部 3D 手部关节监督；两个字段是兼容别名，至少设置一个。关节顺序必须是 `JOINT_ORDER`：`wrist`，随后按 `thumb/index/middle/ring/little` 各 3 个非指尖关节。必须与 `target_mano` 使用同一窗口首帧 model-camera 坐标系；单位在 metadata 中声明。 |
+| `hand_joints3d` / `target_joints3d` | 按 `joints3d` 目标需要 | `float[B, 2, T, 16, 3]` | 外部 3D 手部关节监督，不是模型输出；模型仍预测 `ManoFlowState`，再解码到公共 16 点。两个字段是兼容别名，至少设置一个。 |
 | `joint_valid` | 与 3D 关节同时提供 | `bool[B, 2, T, 16]` | 每个 3D 关节点是否有效。无效点可以保留 NaN，但必须在 mask 中置为 `False`。 |
 | `joint_confidence` | 可选 | `float[B, 2, T, 16]` | 数据集原生关节置信度；没有原生置信度时使用 `None`，不要伪造置信度。 |
 | `target_mano` | 按 `flow` / MANO 目标需要 | `ManoFlowState`：translation `[B,2,T,3]`、root rotation `[B,2,T,6]`、local rotation `[B,2,T,15,6]` | MANO flow 监督。旋转使用连续 6D 表示；坐标系、单位和缺失帧语义必须在 `metadata` 说明。 |
@@ -84,7 +84,7 @@ sample = adapter.sample(seed=seed, batch_size=batch_size, window=window)
 
 ## EgoDex adaptor
 
-`EgoDexAdapter` 使用 `EGODEX_ROOT` 下的配对文件：
+`EgoDexAdapter` 使用 `EGODEX_ROOT` 下的配对文件；训练模型仍统一预测 `ManoFlowState`，EgoDex 关键点只作为可配置的解码后 `joints3d` 监督：
 
 ```text
 <root>/<part>/<task>/<episode>.mp4
@@ -93,7 +93,7 @@ sample = adapter.sample(seed=seed, batch_size=batch_size, window=window)
 
 `part1`–`part5` 是 `train`，`test` 是 `test`。HDF5 至少需要 `transforms/camera`、手部 `transforms/<side><joint>`；可选的 `confidences/<side><joint>` 会进入 `joint_confidence`。视频帧数必须与标注一致，窗口必须是连续帧。EgoDex 保留原始 RGB、原始 ARKit world 坐标和数据集原始单位，不做图像旋转、投影或 MANO 拟合；raw 相机矩阵是 `world_from_camera`，模型相机目标统一为 `current_model_camera_to_first_model_camera`：`U_t = inverse(E_0) @ E_t`，reference frame 是窗口首帧 source camera。3D joints 同样先转换到该首帧 camera 坐标。没有可靠内参时使用代码中的 fallback，并在 metadata 标出 `intrinsic_fallback`。
 
-该 adaptor 当前提供 3D 关节和相机几何、但条件 token 是显式的零张量，且不提供 `target_mano`。因此当前训练入口对非 HOT3D 数据集只允许正权重 `joints3d`，例如：
+该 adaptor 当前提供 3D 关节和相机几何、但条件 token 是显式的零张量，且不提供 `target_mano`。因此只能启用不依赖 MANO 真值的正权重 `joints3d`；训练模型仍是 MMDiT，输出仍为 `ManoFlowState`，关键点只监督解码后的 MANO joints，例如：
 
 ```bash
 python -m src.train.train \
@@ -107,3 +107,26 @@ python -m src.train.train \
 ```
 
 如果新数据集要启用 MANO、相机或条件模型 loss，必须先在 adaptor 中提供对应的 target/condition，并同步修改训练入口的能力检查和测试；不能只在命令行添加 loss 名称。
+
+## 只有 3D keypoint 标注时拟合 MANO
+
+如果数据集没有 MANO 标注、只有 3D joints，适配器可以调用 `src.model.wrappers.mano_fit.fit_joints_to_mano` 生成统一的 `target_mano`。该接口只负责一次拟合，不负责数据集读取、缓存或训练流程；数据集原始目录仍必须保持只读。
+
+```python
+from src.model.flow.state import ManoFlowState
+from src.model.wrappers import ManoWrapper, fit_joints_to_mano
+
+mano = ManoWrapper()
+target_mano: ManoFlowState = fit_joints_to_mano(
+    mano,
+    joints3d,                    # float [B,2,T,16,3]
+    initial_state=initial_state,  # optional ManoFlowState
+    joint_valid=joint_valid,      # optional bool [B,2,T,16]
+    steps=20,
+    lr=0.05,
+)
+```
+
+输入的 16 个关节必须使用公共 `JOINT_ORDER`：`wrist`，随后是 `thumb`、`index`、`middle`、`ring`、`little` 各 3 个关节；左右手顺序固定为 `left, right`。接口内部会将公共顺序映射到 MANO 原生顺序，再优化 root rotation、15 个局部 rotation 和 translation。
+
+返回值是统一的 `ManoFlowState`：`translation [B,2,T,3]`、`root_rotation [B,2,T,6]` 和 `local_rotation [B,2,T,15,6]`。旋转使用连续 6D 表示，shape/betas 不拟合而沿用输入 MANO 模型的固定 shape；输出与输入 joints 使用相同坐标系和单位。无效或 NaN 关节可通过 `joint_valid` 排除；若没有任何有效关节，接口会抛出错误。

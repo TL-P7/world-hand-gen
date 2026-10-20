@@ -53,7 +53,7 @@ from src.train.detector_worker import DetectorWorker
 from src.train.flow_sampling import sample_flow_time, sample_noise
 from src.train.sample import collate_samples, sample_batch, sample_window
 from src.train.step import DEFAULT_WEIGHTS, train_step
-from src.train.runner import parse_key_values, parse_losses, train_joint
+from src.train.runner import parse_key_values, parse_losses, train_mano
 
 
 def _set_seed(seed: int) -> None:
@@ -223,20 +223,12 @@ def main() -> None:
     parser.add_argument("--eval-vggt-device", default="cuda:3")
     args = parser.parse_args()
     if args.dataset != "hot3d":
-        losses = parse_losses(args.losses or "joints3d=1.0")
-        if set(name for name, weight in losses.items() if weight > 0) != {"joints3d"}:
-            parser.error("non-HOT3D adapters currently require exactly joints3d as the positive loss")
         adapter = make_adapter(args.dataset, **parse_key_values(args.dataset_config))
-        train_joint(
-            adapter=adapter,
-            steps=args.max_steps,
-            batch_size=args.global_batch_size,
-            window=args.window,
-            device=args.device,
-            seed=args.seed,
-            log_every=args.log_every,
-            save_every=args.save_every,
-            output_dir=args.experiment_dir,
+        train_mano(
+            adapter=adapter, steps=args.max_steps, batch_size=args.global_batch_size,
+            window=args.window, device=args.device, seed=args.seed,
+            log_every=args.log_every, save_every=args.save_every,
+            output_dir=args.experiment_dir, weights=parse_losses(args.losses or "joints3d=1.0"),
         )
         return
     args.cache_root = CACHE_ROOT

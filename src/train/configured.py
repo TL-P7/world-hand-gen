@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 
 from src.data.adapters import make_adapter
-from src.train.runner import parse_key_values, parse_losses, train_joint
+from src.train.runner import parse_key_values, parse_losses, train_mano
 
 
 def main() -> None:
@@ -27,15 +27,13 @@ def main() -> None:
     parser.add_argument("--heads", type=int, default=4)
     args = parser.parse_args()
     losses = parse_losses(args.losses)
-    if set(losses) != {"joints3d"} or losses["joints3d"] <= 0:
-        raise ValueError("this validation entry requires exactly one positive joints3d loss")
     adapter = make_adapter(args.dataset, **parse_key_values(args.dataset_config))
-    train_joint(
+    train_mano(
         adapter=adapter, steps=args.steps, batch_size=args.batch_size,
         window=args.window, device=args.device, seed=args.seed,
         log_every=args.log_every, save_every=args.save_every,
-        output_dir=args.output_dir, model_dim=args.model_dim,
-        depth=args.depth, heads=args.heads,
+        output_dir=args.output_dir, weights=losses,
+        model_dim=512, depth=8, heads=8,
     )
 
 
